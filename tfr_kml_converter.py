@@ -14,6 +14,7 @@ import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
@@ -46,6 +47,7 @@ class TfrFeature:
     begin: Optional[str] = None
     end: Optional[str] = None
     source_url: Optional[str] = None
+    last_modified: Optional[datetime] = None
 
 
 class ConversionError(RuntimeError):
@@ -118,6 +120,9 @@ def parse_geojson(data: bytes, source_url: str) -> List[TfrFeature]:
         desc = build_description(props)
         begin = first_present(props, ["BEGIN", "begin", "effective_from", "start"], None)
         end = first_present(props, ["END", "end", "effective_to", "stop"], None)
+        last_modified = parse_faa_timestamp(
+            first_present(props, ["LAST_MODIFICATION_DATETIME", "last_modification_datetime"], None)
+        )
 
         polygons: List[List[Tuple[float, float]]] = []
         lines: List[List[Tuple[float, float]]] = []
@@ -148,6 +153,7 @@ def parse_geojson(data: bytes, source_url: str) -> List[TfrFeature]:
                 begin=str(begin) if begin else None,
                 end=str(end) if end else None,
                 source_url=source_url,
+                last_modified=last_modified,
             )
         )
     return out
@@ -174,6 +180,16 @@ def build_description(props: dict[str, Any]) -> str:
     if extra_description:
         lines.insert(0, str(extra_description))
     return "\n".join(lines)
+
+
+def parse_faa_timestamp(value: Any) -> Optional[datetime]:
+    if value in ("", None):
+        return None
+    text = re.sub(r"\D", "", str(value))
+    for fmt, length in (("%Y%m%d%H%M", 12), ("%Y%m%d%H%M%S", 14), ("%Y%m%d", 8)):
+        if len(text) == length:
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+    return None
 
 
 def _geojson_positions(coords: Sequence[Any]) -> List[Tuple[float, float]]:
@@ -339,12 +355,11 @@ def build_kml(features: Sequence[TfrFeature]) -> bytes:
     ET.SubElement(doc, qn("name")).text = "Active TFRs"
     ET.SubElement(doc, qn("description")).text = "Current Temporary Flight Restrictions converted for operational mapping."
 
-    style = ET.SubElement(doc, qn("Style"), id=env("DEFAULT_STYLE_ID", "tfrStyle"))
-    line = ET.SubElement(style, qn("LineStyle"))
-    ET.SubElement(line, qn("color")).text = "ff0000ff"
-    ET.SubElement(line, qn("width")).text = "3"
-    poly = ET.SubElement(style, qn("PolyStyle"))
-    ET.SubElement(poly, qn("color")).text = "660000ff"
+    add_style(doc, "tfrRecentStyle", line_color="ff00ff00", poly_color="6600ff00")
+    add_style(doc, "tfrSixHourStyle", line_color="ff00ffff", poly_color="6600ffff")
+    add_style(doc, "tfrDefaultStyle", line_color="ff0000ff", poly_color="660000ff")
+
+    now = datetime.now(timezone.utc)
 
     for feature in features:
         placemark = ET.SubElement(doc, qn("Placemark"))
@@ -357,7 +372,7 @@ def build_kml(features: Sequence[TfrFeature]) -> bytes:
         if feature.source_url:
             desc_lines.append(f"Source: {feature.source_url}")
         ET.SubElement(placemark, qn("description")).text = "\n".join([line for line in desc_lines if line])
-        ET.SubElement(placemark, qn("styleUrl")).text = f"#{env('DEFAULT_STYLE_ID', 'tfrStyle')}"
+        ET.SubElement(placemark, qn("styleUrl")).text = f"#{style_id_for_feature(feature, now)}"
 
         if feature.polygons:
             for ring in feature.polygons:
@@ -378,6 +393,26 @@ def build_kml(features: Sequence[TfrFeature]) -> bytes:
             ET.SubElement(pt, qn("coordinates")).text = f"{feature.point[0]},{feature.point[1]},0"
 
     return ET.tostring(kml, encoding="utf-8", xml_declaration=True)
+
+
+def add_style(doc: ET.Element, style_id: str, line_color: str, poly_color: str) -> None:
+    style = ET.SubElement(doc, qn("Style"), id=style_id)
+    line = ET.SubElement(style, qn("LineStyle"))
+    ET.SubElement(line, qn("color")).text = line_color
+    ET.SubElement(line, qn("width")).text = "3"
+    poly = ET.SubElement(style, qn("PolyStyle"))
+    ET.SubElement(poly, qn("color")).text = poly_color
+
+
+def style_id_for_feature(feature: TfrFeature, now: datetime) -> str:
+    if not feature.last_modified:
+        return "tfrDefaultStyle"
+    age_hours = (now - feature.last_modified).total_seconds() / 3600
+    if 0 <= age_hours <= 1:
+        return "tfrRecentStyle"
+    if 1 < age_hours <= 6:
+        return "tfrSixHourStyle"
+    return "tfrDefaultStyle"
 
 
 def _coords_to_kml(coords: Sequence[Tuple[float, float]]) -> str:
