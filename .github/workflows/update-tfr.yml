@@ -3,7 +3,7 @@ name: Update Active TFR KML
 on:
   schedule:
     # Runs once every hour. GitHub Actions schedules use UTC.
-    - cron: "0 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
