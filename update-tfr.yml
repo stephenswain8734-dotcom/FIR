@@ -1,0 +1,117 @@
+name: Update Active TFR KML
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Generate KML and KMZ
+        env:
+          SOURCE_URL: https://tfr.faa.gov/tfr3/export/json
+          OUTPUT_KML: site/active_tfrs.kml
+          OUTPUT_KMZ: site/active_tfrs.kmz
+          CREATE_KMZ: "1"
+        run: |
+          mkdir -p site
+          python "TFR builder/tfr_kml_converter.py"
+
+      - name: Build GitHub Pages files
+        shell: bash
+        run: |
+          UPDATED_AT="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          PAGES_BASE_URL="https://${GITHUB_REPOSITORY_OWNER}.github.io/${REPO_NAME}"
+
+          cat > site/Active_TFRs_Network_Link.kml <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <kml xmlns="http://www.opengis.net/kml/2.2">
+            <Document>
+              <name>Active TFRs</name>
+              <description>Hosted FAA Temporary Flight Restrictions KML. Last updated ${UPDATED_AT}.</description>
+              <NetworkLink>
+                <name>Active TFRs</name>
+                <open>1</open>
+                <refreshVisibility>1</refreshVisibility>
+                <flyToView>0</flyToView>
+                <Link>
+                  <href>${PAGES_BASE_URL}/active_tfrs.kml</href>
+                  <refreshMode>onInterval</refreshMode>
+                  <refreshInterval>3600</refreshInterval>
+                </Link>
+              </NetworkLink>
+            </Document>
+          </kml>
+          EOF
+
+          cat > site/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Active TFRs</title>
+              <style>
+                body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; color: #1f2933; }
+                main { max-width: 760px; }
+                code { background: #f3f4f6; padding: 0.15rem 0.3rem; border-radius: 4px; }
+                a { color: #075985; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Active TFRs</h1>
+                <p>FAA Temporary Flight Restrictions converted to KML/KMZ for Google Earth.</p>
+                <p>Last updated: <strong>${UPDATED_AT}</strong></p>
+                <ul>
+                  <li><a href="./active_tfrs.kml">active_tfrs.kml</a></li>
+                  <li><a href="./active_tfrs.kmz">active_tfrs.kmz</a></li>
+                  <li><a href="./Active_TFRs_Network_Link.kml">Google Earth Network Link</a></li>
+                </ul>
+                <p>Google Earth Pro Network Link URL:</p>
+                <p><code>${PAGES_BASE_URL}/Active_TFRs_Network_Link.kml</code></p>
+              </main>
+            </body>
+          </html>
+          EOF
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
