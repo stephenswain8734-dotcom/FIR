@@ -2,6 +2,7 @@ name: Update Active TFR KML
 
 on:
   schedule:
+    # Runs once every hour. GitHub Actions schedules use UTC.
     - cron: "0 * * * *"
   workflow_dispatch:
 
@@ -16,6 +17,7 @@ concurrency:
 
 jobs:
   build:
+    name: Build TFR site
     runs-on: ubuntu-latest
 
     steps:
@@ -27,7 +29,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify expected files
+      - name: Verify converter exists
         shell: bash
         run: |
           set -euo pipefail
@@ -40,6 +42,7 @@ jobs:
           echo "Converter file:"
           ls -la "tfr_kml_converter.py"
           test -f "tfr_kml_converter.py"
+          echo "Found tfr_kml_converter.py"
 
       - name: Generate KML and KMZ
         shell: bash
@@ -54,8 +57,9 @@ jobs:
           python "tfr_kml_converter.py"
           test -s site/active_tfrs.kml
           test -s site/active_tfrs.kmz
+          echo "Generated KML and KMZ successfully"
 
-      - name: Build GitHub Pages files
+      - name: Build Pages site
         shell: bash
         run: |
           set -euo pipefail
@@ -91,17 +95,10 @@ jobs:
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
               <title>Active TFRs</title>
-              <style>
-                body { font-family: Arial, sans-serif; margin: 2rem; line-height: 1.5; color: #1f2933; }
-                main { max-width: 760px; }
-                code { background: #f3f4f6; padding: 0.15rem 0.3rem; border-radius: 4px; }
-                a { color: #075985; }
-              </style>
             </head>
             <body>
               <main>
                 <h1>Active TFRs</h1>
-                <p>FAA Temporary Flight Restrictions converted to KML/KMZ for Google Earth and Everbridge.</p>
                 <p>Last updated: <strong>${UPDATED_AT}</strong></p>
                 <ul>
                   <li><a href="./active_tfrs.kml">active_tfrs.kml</a> - direct KML for Everbridge VCC</li>
@@ -110,14 +107,12 @@ jobs:
                 </ul>
                 <p>Everbridge VCC URL:</p>
                 <p><code>${PAGES_BASE_URL}/active_tfrs.kml</code></p>
-                <p>Google Earth Pro Network Link URL:</p>
-                <p><code>${PAGES_BASE_URL}/Active_TFRs_Network_Link.kml</code></p>
               </main>
             </body>
           </html>
           EOF
 
-          echo "Built Pages site:"
+          echo "Built Pages files:"
           find site -maxdepth 1 -type f -printf "%f %s bytes\n"
 
       - name: Configure GitHub Pages
@@ -129,13 +124,14 @@ jobs:
           path: site
 
   deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: build
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
 
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy Pages site
         id: deployment
         uses: actions/deploy-pages@v4
